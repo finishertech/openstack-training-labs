@@ -9,11 +9,12 @@ fi
 unset bp_install
 
 export PATH=/Applications/VirtualBox.app/Contents/MacOS:$PATH
+export OS_VMS="controller compute1"
 
 #tag::openstack-poweron[]
 openstack-poweron() {
   local vm
-  for vm in controller compute1
+  for vm in $OS_VMS
   do
     VBoxManage startvm $vm --type headless
   done
@@ -23,18 +24,81 @@ openstack-poweron() {
 #tag::openstack-poweroff[]
 openstack-poweroff() {
   local vm
-  for vm in controller compute1
+  for vm in $OS_VMS
   do
     VBoxManage controlvm $vm poweroff
   done
 }
 #end::openstack-poweroff[]
 
+openstack-snapshot() {
+  local action=$1
+  local sn=$2
+  local vm=true
+  if [ ! "$action" ]
+  then
+    echo "take or restore?"
+    vm=false
+  fi
+  if [ ! "$sn" ]
+  then
+    echo "what snapshot?"
+    vm=false
+  fi
+  ! $vm && return 1
+  for vm in $OS_VMS
+  do
+    VBoxManage snapshot $vm $action "$vm-$sn"
+  done
+}
+
+macos-network() {
+  # Ref: https://apple.stackexchange.com/a/223446
+  local services=$(networksetup -listnetworkserviceorder | grep 'Hardware Port')
+  local line
+  while read line; do
+    local sname=$(echo $line | awk -F  "(, )|(: )|[)]" '{print $2}')
+    local sdev=$(echo $line | awk -F  "(, )|(: )|[)]" '{print $4}')
+    #echo "Current service: $sname, $sdev, $currentservice"
+    if [ -n "$sdev" ]; then
+      local ifout="$(ifconfig $sdev 2>/dev/null)"
+      echo "$ifout" | grep 'status: active' > /dev/null 2>&1
+      if [ "$?" -eq 0 ]; then
+        local currentservice="$sname"
+        local currentdevice="$sdev"
+        local currentmac=$(echo "$ifout" | awk '/ether/{print $2}')
+        case "$1" in
+          service) echo $currentservice; return 0;;
+          device) echo $currentdevice; return 0;;
+          mac) echo $currentmac; return 0;;
+          *)
+            # may have multiple active devices, so echo it here
+            echo "$currentservice, $currentdevice, $currentmac"
+        esac
+      fi
+    fi
+  done <<< "$(echo "$services")"
+  if [ -z "$currentservice" ]; then
+    >&2 echo "Could not find current service"
+    return 1
+  fi
+}
+
+macos-ip() {
+  ifconfig $(macos-network device) | grep 'inet ' | awk '{print $2}'
+}
+
+macos-ip-forward() {
+  local value=${1:-1}
+  sudo sysctl -w net.inet.ip.forwarding=$value
+}
+
 macos-nat-configure() {
   which gsed > /dev/null || brew install gsed
   which sponge > /dev/null || brew install moreutils
   local file=/etc/pf.conf
-  local cfg='nat on en0 from vboxnet1:network to any -> (en0)'
+  local en=`macos-network device`
+  local cfg="nat on $en from vboxnet1:network to any -> ($en)"
   if ! grep -q "$cfg" $file
   then
     sudo cp $file $file.original
