@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+OS_LAB=`cd "$(dirname "${BASH_SOURCE[0]}")/.."; pwd`
+
+bp_install="source $OS_LAB/ft-scripts/install"
+if ! grep -q "^$bp_install$" ~/.bash_profile
+then
+  echo "$bp_install" >> ~/.bash_profile
+fi
+unset bp_install
+
+export PATH=/Applications/VirtualBox.app/Contents/MacOS:$PATH
+
+#tag::openstack-poweron[]
+openstack-poweron() {
+  local vm
+  for vm in controller compute1
+  do
+    VBoxManage startvm $vm --type headless
+  done
+}
+#end::openstack-poweron[]
+
+#tag::openstack-poweroff[]
+openstack-poweroff() {
+  local vm
+  for vm in controller compute1
+  do
+    VBoxManage controlvm $vm poweroff
+  done
+}
+#end::openstack-poweroff[]
+
+macos-nat-configure() {
+  which gsed > /dev/null || brew install gsed
+  which sponge > /dev/null || brew install moreutils
+  local file=/etc/pf.conf
+  local cfg='nat on en0 from vboxnet1:network to any -> (en0)'
+  if ! grep -q "$cfg" $file
+  then
+    sudo cp $file $file.original
+    gsed "/^dummynet-anchor/a $cfg" $file | sudo sponge $file
+  fi
+  sudo pfctl -e -f $file
+}
+
+macos-nat-restore() {
+  local file=/etc/pf.conf
+  ! [ -f $file.original ] || sudo mv $file.original $file
+  sudo pfctl -d
+}
